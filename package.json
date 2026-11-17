@@ -1,0 +1,27 @@
+{
+  "name": "hex-tycoon",
+  "version": "0.9.0",
+  "description": "Hex Tycoon – multiplayerová logistická hra (ALFA 0.9)",
+  "main": "server/server.js",
+  "scripts": {
+    "build": "node tools/build-game.js",
+    "prestart": "node tools/build-game.js",
+    "start": "node server/server.js",
+    "reset": "node server/server.js --reset",
+    "deploy": "node tools/build-game.js && wrangler deploy",
+    "dev:cf": "node tools/build-game.js && wrangler dev",
+    "test": "node tools/test-world.js && node tools/test-drive.js",
+    "smoke": "node tools/smoke-test.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "ws": "^8.23.0"
+  },
+  "license": "UNLICENSED",
+  "private": true,
+  "devDependencies": {
+    "wrangler": "^4"
+  }
+}

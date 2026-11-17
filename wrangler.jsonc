@@ -1,0 +1,13 @@
+{
+  // Hex Tycoon na Cloudflare Workers: statické soubory z public/ + jedna Durable Object (místnost) pro celou hru.
+  // Název Workeru určuje adresu: https://hextycoon.<tvoje-subdomena>.workers.dev
+  "name": "hextycoon",
+  "main": "worker/index.js",
+  "build": { "command": "node tools/build-game.js" },
+  "compatibility_date": "2025-09-01",
+  "assets": { "directory": "./public", "binding": "ASSETS" },
+  "durable_objects": { "bindings": [ { "name": "GAME", "class_name": "GameRoom" } ] },
+  "migrations": [ { "tag": "v1", "new_sqlite_classes": ["GameRoom"] } ],
+  "observability": { "enabled": true },
+  "vars": { "IDLE_PAUSE": "1", "MAX_COMPANIES": "24" }
+}

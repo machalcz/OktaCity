@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="cs"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hex Tycoon 0.4 – mapa ČR (skutečný kód hry)</title>
+<style>html,body{margin:0;height:100%;background:#0d2236;color:#eef;font-family:system-ui,sans-serif}canvas{position:fixed;inset:0;display:block;touch-action:none}
+#msg{position:fixed;left:8px;bottom:8px;background:rgba(10,24,38,.9);border:1px solid #3b6a96;border-radius:10px;padding:6px 12px;font-size:13px}</style></head><body>
+<canvas id="game"></canvas><div id="msg">…</div>
+<script src="js/config.js"></script><script src="js/grid.js"></script><script src="js/view.js"></script><script src="js/mapgen.js"></script>
+<script src="js/roads.js"></script><script src="js/highway.js"></script><script src="js/goods.js"></script><script src="js/tokens.js"></script>
+<script src="js/mapcr.js"></script><script src="js/hwcr.js"></script>
+<script src="js/worldcr.js"></script><script src="js/economy.js"></script><script src="js/render.js"></script>
+<script src="js/network.js"></script><script src="js/vehicles.js"></script><script src="js/sim.js"></script><script src="js/railsig.js"></script><script src="js/traffic.js"></script>
+<script>
+const canvas = document.getElementById('game'), ctx = canvas.getContext('2d');
+const state = { map: null, net: new RoadNet(), kind: 'road', sel: null, pick: null, hoverConn: null, view: 'top', viewStep: 0, me: 1, players: { 1: { id: 1, name: 'Ty', color: '#d8402f' } },
+  money: 0, sim: newSim(), sites: [], buildMode: false, nextId: 0, simSpeed: 1, cam: { x: 0, y: 0, zoom: 1 }, seedNum: 7, locks: {}, lockKey: {} };
+state.sim.ambList = [];
+function lockedBy() { return null; }
+let W, H, DPR = 1;
+function resize() { DPR = 1; W = innerWidth; H = innerHeight; canvas.width = W; canvas.height = H; }
+addEventListener('resize', resize); resize();
+let t0 = performance.now(); state.map = makeWorld(7).map; const tGen = Math.round(performance.now() - t0);
+function fit() { updateView(); const x1 = (CFG.COLS - 1) * A + AP, y1 = (CFG.ROWS - 1) * A + AP; state.cam.zoom = Math.min(W / (x1 + AP), H / (y1 + AP)) * 0.98; state.cam.x = x1 / 2; state.cam.y = y1 / 2; }
+fit();
+function draw() { updateView(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.fillStyle = '#0d2236'; ctx.fillRect(0, 0, W, H); drawWorld(ctx, state); }
+window.__draw = draw; window.__fit = fit;
+window.__bench = (zoom, x, y, n) => { state.cam.zoom = zoom; if (x !== undefined) { state.cam.x = x; state.cam.y = y; } const t = performance.now(); for (let i = 0; i < n; i++) draw(); return (performance.now() - t) / n; };
+let drag = null; canvas.onpointerdown = e => drag = { x: e.clientX, y: e.clientY, cx: state.cam.x, cy: state.cam.y };
+canvas.onpointermove = e => { if (!drag) return; const d = unprojDelta((e.clientX - drag.x) / state.cam.zoom, (e.clientY - drag.y) / state.cam.zoom); state.cam.x = drag.cx - d.x; state.cam.y = drag.cy - d.y; draw(); };
+canvas.onpointerup = () => drag = null;
+canvas.onwheel = e => { e.preventDefault(); const b = s2w(e.clientX, e.clientY, false); state.cam.zoom = Math.max(0.1, Math.min(8, state.cam.zoom * (e.deltaY < 0 ? 1.15 : 1 / 1.15))); const a = s2w(e.clientX, e.clientY, false); state.cam.x += b.x - a.x; state.cam.y += b.y - a.y; draw(); };
+document.getElementById('msg').textContent = 'Mapa ČR: ' + CFG.COLS + '×' + CFG.ROWS + ', tokenů ' + state.map.tokens.length + ', generování ' + tGen + ' ms';
+draw();
+</script></body></html>

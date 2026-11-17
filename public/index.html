@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Hex Tycoon – ALFA 0.3</title>
+<link rel="stylesheet" href="css/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Cpolygon points=%2710,2 22,2 30,10 30,22 22,30 10,30 2,22 2,10%27 fill=%27%232d6a9f%27/%3E%3C/svg%3E">
+</head>
+<body>
+<canvas id="game"></canvas>
+
+<header id="hud">
+  <button id="coBtn" class="chip co" title="Moje společnost"><i id="coDot"></i><span id="coName">Společnost</span></button>
+  <div class="chip money"><b id="money">0 Kč</b><small id="rate"></small></div>
+  <div class="spdbox"><span id="online" title="Hráči online"></span><button id="rulesBtn" title="Pravidla hry">📖</button></div>
+  <span id="ver"></span>
+</header>
+<div id="quick"></div>
+
+<div id="zoom">
+  <button id="zoomIn" aria-label="Přiblížit">+</button>
+  <button id="zoomOut" aria-label="Oddálit">−</button>
+  <button id="zoomFit" aria-label="Celá mapa">⌂</button>
+  <button id="rotL" aria-label="Otočit doleva">↺</button>
+  <button id="rotR" aria-label="Otočit doprava">↻</button>
+</div>
+
+<div id="status" class="hidden"></div>
+<div id="cellbar" class="hidden"><span id="cbTxt"></span><button id="cbBull">🧹 Bourání</button><button id="cbClear">Smazat pole</button><button id="cbCancel">✕ Zrušit</button></div>
+
+<nav id="toolbar">
+  <button id="tbRoad"><i>🛣</i><span>Silnice</span></button>
+  <button id="tbRail"><i>🛤</i><span>Koleje</span></button>
+  <button id="tbCar"><i>🚚</i><span>Auto</span></button>
+  <button id="tbTrain"><i>🚆</i><span>Vlak</span></button>
+  <button id="tbShip"><i>🚢</i><span>Loď</span></button>
+  <button id="tbObj"><i>🏗</i><span>Objekt</span></button>
+  <button id="tbCo"><i>🏢</i><span>Společnost</span></button>
+  <button id="tbMore"><i>☰</i><span>Více</span></button>
+</nav>
+
+<aside id="sheet" class="hidden"><div id="shBody"></div></aside>
+<div id="found" class="hidden"></div>
+<div id="offline" class="hidden">Spojení ztraceno – připojuji…</div>
+
+<script src="js/config.js?v=cr-2026-11-19b"></script>
+<script src="js/grid.js?v=cr-2026-11-19b"></script>
+<script src="js/view.js?v=cr-2026-11-19b"></script>
+<script src="js/mapgen.js?v=cr-2026-11-19b"></script>
+<script src="js/roads.js?v=cr-2026-11-19b"></script>
+<script src="js/highway.js?v=cr-2026-11-19b"></script>
+<script src="js/goods.js?v=cr-2026-11-19b"></script>
+<script src="js/tokens.js?v=cr-2026-11-19b"></script>
+<script src="js/mapcr.js?v=cr-2026-11-19b"></script>
+<script src="js/hwcr.js?v=cr-2026-11-19b"></script>
+<script src="js/worldcr.js?v=cr-2026-11-19b"></script>
+<script src="js/economy.js?v=cr-2026-11-19b"></script>
+<script src="js/render.js?v=cr-2026-11-19b"></script>
+<script src="js/network.js?v=cr-2026-11-19b"></script>
+<script src="js/vehicles.js?v=cr-2026-11-19b"></script>
+<script src="js/sim.js?v=cr-2026-11-19b"></script>
+<script src="js/railsig.js?v=cr-2026-11-19b"></script>
+<script src="js/traffic.js?v=cr-2026-11-19b"></script>
+<script src="js/ships.js?v=cr-2026-11-19b"></script>
+<script src="js/ui.js?v=cr-2026-11-19b"></script>
+<script src="js/panels.js?v=cr-2026-11-19b"></script>
+<script src="js/main.js?v=cr-2026-11-19b"></script>
+<script src="js/rules.js?v=cr-2026-11-19b"></script>
+<script src="js/net.js?v=cr-2026-11-19b"></script>
+</body>
+</html>

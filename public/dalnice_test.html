@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="cs"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hex Tycoon 0.4 – kontrola dálnice (skutečný kód hry)</title>
+<style>
+html,body{margin:0;height:100%;background:#0d2236;font-family:system-ui,sans-serif;color:#eef}
+canvas{position:fixed;inset:0;display:block;touch-action:none}
+#bar{position:fixed;left:8px;top:8px;right:8px;display:flex;flex-wrap:wrap;gap:6px;align-items:center;z-index:5}
+#bar button{background:#16324d;color:#eef;border:1px solid #3b6a96;border-radius:8px;padding:7px 11px;font-size:14px;cursor:pointer}
+#bar button.on{background:#2b7fc4}
+#msg{position:fixed;left:8px;bottom:8px;right:8px;background:rgba(10,24,38,.92);border:1px solid #3b6a96;border-radius:10px;padding:8px 12px;font-size:14px;z-index:5;max-height:30vh;overflow:auto}
+#msg .ok{color:#8cf59a}#msg .no{color:#ff9a8a}
+</style></head><body>
+<canvas id="game"></canvas>
+<div id="bar">
+  <button data-go="A">1 Silnice kolmo</button>
+  <button data-go="B">2 Silnice šikmo</button>
+  <button data-go="C">3 Koleje kolmo</button>
+  <button data-go="D">4 Koleje šikmo</button>
+  <button data-go="E">5 Napojení</button>
+  <button data-go="F">6 Rampa do oblouku</button>
+  <button data-go="G">7 Výhybna a semafory</button>
+  <button data-go="all">⌂ Celek</button>
+  <button id="bRoad" class="on">🛣 Stavět silnici</button>
+  <button id="bRail">🛤 Stavět kolej</button>
+  <button id="bDel">🧹 Bourat pole</button>
+  <button id="bView">Pohled: nadhled</button>
+  <button id="bRot">↻ Otočit</button>
+  <button id="bPause">⏸ Provoz</button>
+</div>
+<div id="msg">Načítám…</div>
+
+<script src="js/config.js"></script>
+<script src="js/grid.js"></script>
+<script src="js/view.js"></script>
+<script src="js/mapgen.js"></script>
+<script src="js/roads.js"></script>
+<script src="js/highway.js"></script>
+<script src="js/goods.js"></script>
+<script src="js/tokens.js"></script>
+<script src="js/mapcr.js"></script>
+<script src="js/hwcr.js"></script>
+<script src="js/worldcr.js"></script>
+<script src="js/economy.js"></script>
+<script src="js/render.js"></script>
+<script src="js/network.js"></script>
+<script src="js/vehicles.js"></script>
+<script src="js/sim.js"></script>
+<script src="js/railsig.js"></script>
+<script src="js/traffic.js"></script>
+<script>
+// ====== minimální prostředí bez serveru: skutečný kód hry (mapa, tokeny, graf tras, okolní provoz, dálnice) ======
+const canvas = document.getElementById('game'), ctx = canvas.getContext('2d'), $ = id => document.getElementById(id);
+const state = {
+  map: null, net: new RoadNet(), kind: 'road', sel: null, pick: null, hoverConn: null, view: 'tilt', viewStep: 0,
+  me: 1, players: { 1: { id: 1, name: 'Ty', color: '#d8402f' }, 2: { id: 2, name: 'Soused', color: '#3f6fb3' } },
+  money: 99999, sim: newSim(), sites: [], buildMode: false, nextId: 0, simSpeed: 1, trainOn: false,
+  cam: { x: 0, y: 0, zoom: 1 }, seedNum: 7, tool: 'road', locks: {}, lockKey: {}
+};
+state.sim.ambList = [];
+let W = 0, H = 0, DPR = 1, dirty = true, paused = false, bulldoze = false;
+function lockedBy() { return null; }
+
+// rovná zelená pevnina bez stromů a měst, ať je dobře vidět jen dálnice, města a stavby
+const map = makeWorld(7).map; state.map = map;
+map.tokens.length = 0; map.tokenIdx.clear(); map.trees = []; map.buildings = []; map.poles = []; map.structs = [];
+map.land.fill(1); map.urban.fill(0); delete map._chunks; prepareMap(map);
+
+const HWR = 22, HC0 = 3, HC1 = 40;
+hwSet(map, Array.from({ length: HC1 - HC0 + 1 }, (_, i) => [HC0 + i, HWR, 'h']));
+const ZONE = { A: 5, B: 11, C: 17, D: 23, E1: 28, E2: 30, F: 38 };
+const GR = 32, GC = 10;                                   // výhybna: řádek 32, sloupce GC-4 … GC+8
+
+// ---- města (tokeny) na koncích všech tras; přípojky určuji ručně, aby seděly na postavené trasy ----
+const TK = {}; let tkSeq = 0;
+function city(key, c, r, road, rail) {
+  const tk = makeToken(map, ++tkSeq, 'city', c, r, 1, key);
+  tk.road = road || []; tk.rail = rail || []; TK[key] = tk; return tk;
+}
+const fails = [];
+function put(kind, cell, a, b, pid) {
+  const res = checkPair(map, state.net, cell, kind, a, b);
+  if (!res.ok) { fails.push(cell.t + cell.c + ',' + cell.r + ' ' + a + '>' + b + ': ' + res.reason); return; }
+  res.next.own = { road: kind === 'road' ? [pid || 1] : [], rail: kind === 'rail' ? (pid || 2) : 0 }; state.net.set(cell, res.next);
+}
+function walk(cell, exitEdge, steps) {
+  const out = [];
+  for (let i = 0; i < steps; i++) { const nb = neighborAcross(cell, exitEdge); cell = nb.cell; const enter = nb.k, exit = oppositeEdge(cell, enter); out.push({ cell, from: enter, to: exit }); exitEdge = exit; }
+  return out;
+}
+function makeLine(cell, aEdge, bEdge, steps) {
+  const fwd = walk(cell, bEdge, steps);
+  const back = walk(cell, aEdge, steps).reverse().map(e => ({ cell: e.cell, from: e.to, to: e.from }));
+  return back.concat([{ cell, from: aEdge, to: bEdge }], fwd);
+}
+const col = (c, r0, r1) => { const o = []; for (let r = r0; r <= r1; r++) o.push({ cell: mkO(c, r), from: 2, to: 6 }); return o; };   // svislá trasa (sever–jih)
+const LINES = {};
+function build(kind, key, entries) { LINES[key] = entries; for (const e of entries) put(kind, e.cell, e.from, e.to); }
+
+// diagonála přes dálnici: 3 osmiúhelníky na každou stranu, na koncích se stočí svisle a vede do města
+function diag(kind, key, c, ports) {
+  const line = makeLine(mkO(c, HWR), 5, 1, 6), first = line[0], last = line[line.length - 1];
+  first.from = 1; first.to = 6;                             // jihozápadní konec: ze šikmého ramene dolů
+  last.from = 5; last.to = 2;                               // severovýchodní konec: ze šikmého ramene nahoru
+  const n = [], s = [];
+  for (let i = 1; i <= 2; i++) { n.push({ cell: mkO(last.cell.c, last.cell.r - i), from: 6, to: 2 }); s.push({ cell: mkO(first.cell.c, first.cell.r + i), from: 2, to: 6 }); }
+  build(kind, key, s.reverse().concat(line, n));
+  const tn = city(key + '-sever', last.cell.c, last.cell.r - 3, kind === 'road' ? [6] : [], kind === 'rail' ? [6] : []);
+  const ts = city(key + '-jih', first.cell.c, first.cell.r + 3, kind === 'road' ? [2] : [], kind === 'rail' ? [2] : []);
+  return [ts, tn];
+}
+
+// 1 a 3: kolmo přes dálnici; 2 a 4: šikmo
+build('road', 'A', col(ZONE.A, HWR - 5, HWR + 5)); city('A-sever', ZONE.A, HWR - 6, [6]); city('A-jih', ZONE.A, HWR + 6, [2]);
+diag('road', 'B', ZONE.B);
+build('rail', 'C', col(ZONE.C, HWR - 5, HWR + 5)); city('C-sever', ZONE.C, HWR - 6, [], [6]); city('C-jih', ZONE.C, HWR + 6, [], [2]);
+const DT = diag('rail', 'D', ZONE.D);
+
+// 6: rampa do oblouku – jižní rampa rovně, severní rampa 2 pole rovně a pak 90° na západ do města
+{
+  const c = ZONE.F, r = HWR, N = [];
+  for (let rr = HWR + 1; rr <= HWR + 5; rr++) N.push({ cell: mkO(c, rr), from: 2, to: 6 });
+  const route = [];
+  for (let rr = HWR + 5; rr >= HWR - 1; rr--) route.push({ cell: mkO(c, rr), from: 2, to: 6 });
+  route.push({ cell: mkO(c, r - 2), from: 6, to: 4 });                      // oblouk: z jihu na západ
+  for (let k = 1; k <= 3; k++) route.push({ cell: mkO(c - k, r - 2), from: 0, to: 4 });
+  // pořadí staveb od jihu k severu; hrany u oblouku: 6 = jih, 4 = západ
+  const ordered = route.map(e => e.cell.c === c && e.cell.r === r - 2 ? { cell: e.cell, from: 6, to: 4 } : e);
+  LINES.F = ordered.slice().reverse().map(e => ({ cell: e.cell, from: e.to, to: e.from }));   // pro linePts: od západu k jihu
+  for (const e of ordered) { const k = e.cell.r === r - 2 && e.cell.c === c ? [6, 4] : [e.from, e.to]; put('road', e.cell, k[0], k[1]); }
+  city('F-jih', c, HWR + 6, [2]); city('F-západ', c - 4, r - 2, [0]);
+}
+
+// 5: dvě napojení na dálnici (silnice z boku ke středu pole): sever a jih; provoz po nich řídí trasy dálnice
+{
+  for (let rr = HWR - 5; rr <= HWR - 1; rr++) put('road', mkO(ZONE.E1, rr), 2, 6);
+  put('road', mkO(ZONE.E1, HWR), 2, CENTER);
+  for (let rr = HWR + 1; rr <= HWR + 5; rr++) put('road', mkO(ZONE.E2, rr), 2, 6);
+  put('road', mkO(ZONE.E2, HWR), 6, CENTER);
+  city('E-sever', ZONE.E1, HWR - 6, [6]); city('E-jih', ZONE.E2, HWR + 6, [2]);
+}
+
+// 7: jednokolejná trať s výhybnou, postavená skutečnými pravidly hry
+{
+  const L = ents => ents.forEach(e => put('rail', e.cell, e.from, e.to));
+  for (let c = GC - 3; c <= GC + 7; c++) put('rail', mkO(c, GR), 4, 0);
+  put('rail', mkO(GC, GR), 1, CENTER);
+  put('rail', mkO(GC + 4, GR), 3, CENTER);
+  put('rail', mkS(GC, GR - 1), 2, 0);
+  put('rail', mkO(GC + 1, GR - 1), 5, 0); put('rail', mkO(GC + 2, GR - 1), 4, 0); put('rail', mkO(GC + 3, GR - 1), 4, 7);
+  put('rail', mkS(GC + 3, GR - 1), 1, 3);
+  city('G-západ', GC - 4, GR, [], [0]); city('G-východ', GC + 8, GR, [], [4]);
+}
+
+// dálnice: města na obou koncích a čtyři pruhy mezi nimi (2 + 2, jízda vpravo)
+city('Dálnice-západ', HC0 - 1, HWR, [], []); city('Dálnice-východ', HC1 + 1, HWR, [], []);
+hwLaneRoutes(map, TK['Dálnice-západ'], TK['Dálnice-východ']);
+// napojení: nájezd z města na vnější pruh (po proudu) a sjezd z vnějšího pruhu do města
+(function () {
+  const S = CFG.S, W = TK['Dálnice-západ'], E = TK['Dálnice-východ'], wc = tokenCenter(W), ec = tokenCenter(E);
+  [[ZONE.E1, TK['E-sever']], [ZONE.E2, TK['E-jih']]].forEach(([c, city]) => {
+    const cell = mkO(c, HWR), rec = state.net.get(cell); if (!rec) return;
+    const G = hwJunctionGeom(cell, map.hw.get(c + ',' + HWR), rec), cc = tokenCenter(city), westward = G.tw.x < 0;
+    const lane = G.aL, farW = westward ? wc : ec, farE = westward ? ec : wc;                // směr jízdy na straně junction
+    const off = (q, b) => ({ x: q.x + G.tw.x * b * S, y: q.y + G.tw.y * b * S });          // rovnoběžné pruhy až do města
+    const stem = [off(cc, G.lane), G.P(G.aJ, G.lane)], stemOut = [G.P(G.aJ, -G.lane), off(cc, -G.lane)];
+    hwAddRoute(map, { pts: stem.concat(G.entry.slice(1), [{ x: farW.x, y: farW.y + (G.P(G.aL, G.bR).y - cellCenter(cell).y) }]), from: city.id, to: (westward ? W : E).id, w: 0.6, speed: [2.4, 2.8], mergeInfo: { p0: G.P(G.aA, G.bTaper0), p1: G.P(G.aL, G.bTaper1), dir: G.tw } });
+    hwAddRoute(map, { pts: [{ x: farE.x, y: farE.y + (G.P(G.aL, -G.bR).y - cellCenter(cell).y) }].concat(G.exit, [stemOut[1]]), from: (westward ? E : W).id, to: city.id, w: 0.6, speed: [2.4, 2.8] });
+  });
+})();
+map.hwTarget = 36;
+
+// ====== simulace: skutečné funkce hry (okolní provoz mezi městy, přejezdy) + provoz na dálnici + vlaky po blocích ======
+state.sim.netVer = -1;
+rebuildSim();
+const rs = new RailSim(state.net); state.railSim = rs;
+const tNode = key => rs.M.terminals.find(n => n.id === 'T' + TK[key].id);
+const mkTrain = (a, b, items, loaded, delay) => { const from = tNode(a), to = tNode(b); if (from && to) rs.addTrain({ items, from, to, loaded, delay, speed: 1.0 }); else console.warn('vlak: chybí uzel', a, b); };
+mkTrain('C-sever', 'C-jih', ['loco2', 'wagonCovered', 'wagonOpen'], true, 0);
+mkTrain('C-jih', 'C-sever', ['loco2', 'wagonOpen', 'wagonCovered'], false, 3);
+mkTrain('D-sever', 'D-jih', ['loco2', 'wagonOpen', 'wagonOpen'], true, 1);
+mkTrain('D-jih', 'D-sever', ['loco2', 'wagonCovered', 'wagonCovered'], false, 4);
+mkTrain('G-západ', 'G-východ', ['loco2', 'wagonCovered', 'wagonOpen'], true, 0);
+mkTrain('G-východ', 'G-západ', ['loco2', 'wagonOpen', 'wagonCovered'], false, 0.5);
+mkTrain('G-západ', 'G-východ', ['loco2', 'wagonOpen', 'wagonOpen'], false, 7);
+mkTrain('G-východ', 'G-západ', ['loco2', 'wagonCovered', 'wagonCovered'], true, 8);
+
+// sledování: kde se vozidla (auta i vlaky) poprvé objeví a naposledy zmizí – smí to být jen v tokenu
+const WATCH = { seen: new Map(), badAppear: [], badVanish: [], appear: 0, vanish: 0 };
+function nearestToken(x, y) { let b = 1e9; for (const t of map.tokens) { const c = tokenCenter(t); b = Math.min(b, Math.hypot(c.x - x, c.y - y)); } return b / CFG.S; }
+function watchFrame(sim) {
+  const cur = new Map(), S = CFG.S;
+  // vlak: stopa přední i zadní části (obojí se musí objevit a zmizet v tokenu); auto: střed
+  for (const u of sim.units) { if (u.hidden || u.x === undefined || !(u.fade > 0.1)) continue; cur.set(u, { x: u.x, y: u.y }); }
+  for (const u of sim.ambList) { if (!u.poses || !u.poses.length) continue; for (const k of ['h', 't']) { const p = k === 'h' ? u.poses[0] : u.poses[u.poses.length - 1]; cur.set('T' + u.tid + k, { x: p.x, y: p.y, kind: 'rail' }); } }
+  for (const [u, p] of cur) if (!WATCH.seen.has(u)) { WATCH.appear++; const d = nearestToken(p.x, p.y); if (d > DISC_R + 0.15) WATCH.badAppear.push([+sim.t.toFixed(1), typeof u === 'string' ? u : (u.model || u.kind), +d.toFixed(2), Math.round(p.x), Math.round(p.y)]); }
+  for (const [u, p] of WATCH.seen) if (!cur.has(u)) { WATCH.vanish++; const d = nearestToken(p.x, p.y); if (d > DISC_R + 0.15) WATCH.badVanish.push([+sim.t.toFixed(1), typeof u === 'string' ? u : (u.model || u.kind), +d.toFixed(2), Math.round(p.x), Math.round(p.y)]); }
+  WATCH.seen = cur;
+}
+
+function testStep(dt) {
+  const sim = state.sim;
+  if (sim.netVer !== state.net.ver) { rebuildSim(); }
+  sim.amb.target = Math.max(sim.amb.target, 18);
+  sim.t += dt;
+  updateCrossings(dt);
+  let alive = 0; for (const u of sim.units) if (!u.owner && !u.hwAmb) alive++;
+  sim.spawnT -= dt;
+  if (alive < sim.amb.target && sim.spawnT <= 0) { spawnAmbient(sim); sim.spawnT = 0.7; }
+  hwAmbientStep(sim, dt);
+  for (let i = sim.units.length - 1; i >= 0; i--) { const u = sim.units[i]; if (!stepAmbient(u, dt)) sim.units.splice(i, 1); }
+  rs.step(dt);
+  sim.ambList = rs.units();
+  trafficGuard(sim);
+  watchFrame(sim);
+}
+window.__run = sec => { for (let t = 0; t < sec; t += 0.04) testStep(0.04); return window.__stats(); };
+window.__stats = () => ({
+  t: +state.sim.t.toFixed(0), roadUnits: state.sim.units.length, hwAmb: state.sim.units.filter(u => u.hwAmb).length,
+  guard: { pairs: (state.sim.guard || {}).pairs, stops: (state.sim.guard || {}).stops, last: (state.sim.guard || {}).last },
+  appear: WATCH.appear, vanish: WATCH.vanish, badAppear: WATCH.badAppear.slice(0, 8), badVanish: WATCH.badVanish.slice(0, 8),
+  rail: rs.stats, fails
+});
+
+// ====== kamera a ovládání ======
+function resize() { DPR = Math.min(devicePixelRatio || 1, 2); W = innerWidth; H = innerHeight; canvas.width = Math.round(W * DPR); canvas.height = Math.round(H * DPR); dirty = true; }
+addEventListener('resize', resize); resize();
+function goTo(k) {
+  if (k === 'all') { const a = cellCenter(mkO(HC0, HWR)), b = cellCenter(mkO(HC1, HWR)); state.cam.x = (a.x + b.x) / 2; state.cam.y = a.y; state.cam.zoom = Math.min(1.6, (W - 30) / (b.x - a.x + 2 * A)); }
+  else if (k === 'G') { const g = cellCenter(mkO(GC + 2, GR - 1)); state.cam.x = g.x; state.cam.y = g.y + A * 0.5; state.cam.zoom = 1.25; }
+  else if (k === 'E') { const q = cellCenter(mkO(ZONE.E1 + 1, HWR)); state.cam.x = q.x; state.cam.y = q.y; state.cam.zoom = 1.5; }
+  else { const q = cellCenter(mkO(ZONE[k], HWR)); state.cam.x = q.x; state.cam.y = q.y - (k === 'F' ? A * 0.9 : 0); state.cam.zoom = k === 'F' ? 1.5 : 1.3; if (k === 'F') state.cam.x -= A * 0.6; }
+  dirty = true;
+}
+updateView(); goTo('A');
+function pickCellXY(sx, sy) { const w = s2w(sx, sy, true), c = hitTest(w.x, w.y); return c ? c : null; }
+function connsNear(sx, sy) { if (!state.sel) return null; let best = null, bd = connectorHitPx(state.cam.zoom); for (const cn of connectorsOf(map, state.net, state.sel)) { const p = w2s(cn.x, cn.y, true), d = Math.hypot(p.x - sx, p.y - sy); if (d <= bd) { bd = d; best = cn; } } return best; }
+const log = [];
+function say(t, ok) { log.unshift('<div class="' + (ok ? 'ok' : 'no') + '">' + t + '</div>'); log.length = Math.min(log.length, 5); $('msg').innerHTML = log.join(''); }
+let drag = null;
+canvas.addEventListener('pointerdown', e => { canvas.setPointerCapture(e.pointerId); drag = { x: e.clientX, y: e.clientY, cx: state.cam.x, cy: state.cam.y, moved: false }; });
+canvas.addEventListener('pointermove', e => {
+  if (drag) { const dx = e.clientX - drag.x, dy = e.clientY - drag.y; if (Math.hypot(dx, dy) > 6) drag.moved = true; if (drag.moved) { const d = unprojDelta(dx / state.cam.zoom, dy / state.cam.zoom); state.cam.x = drag.cx - d.x; state.cam.y = drag.cy - d.y; dirty = true; return; } }
+  const cn = connsNear(e.clientX, e.clientY), id = cn ? cn.id : null; if (id !== state.hoverConn) { state.hoverConn = id; dirty = true; }
+});
+canvas.addEventListener('pointerup', e => {
+  const was = drag; drag = null; if (!was || was.moved) return;
+  const sx = e.clientX, sy = e.clientY, cn = connsNear(sx, sy);
+  if (cn && state.sel) {
+    const cell = state.sel;
+    if (state.pick === null) { state.pick = cn.id; dirty = true; return; }
+    if (state.pick === cn.id) { state.pick = null; dirty = true; return; }
+    const res = checkPair(map, state.net, cell, state.kind, state.pick, cn.id);
+    if (!res.ok) { say('✗ ' + (res.reason || 'Nejde'), false); return; }
+    res.next.own = { road: [1], rail: 1 }; state.net.set(cell, res.next);
+    say('✓ Postaveno', true);
+    state.pick = null; dirty = true; return;
+  }
+  const c = pickCellXY(sx, sy); state.pick = null;
+  if (bulldoze) { if (c && state.net.get(c)) { state.net.clearCell(c); say('Zbouráno', true); } state.sel = null; dirty = true; return; }
+  state.sel = c && !sameCell(c, state.sel) ? c : null;
+  dirty = true;
+});
+canvas.addEventListener('wheel', e => { e.preventDefault(); const b = s2w(e.clientX, e.clientY, false); state.cam.zoom = Math.max(0.3, Math.min(8, state.cam.zoom * (e.deltaY < 0 ? 1.12 : 1 / 1.12))); const a = s2w(e.clientX, e.clientY, false); state.cam.x += b.x - a.x; state.cam.y += b.y - a.y; dirty = true; }, { passive: false });
+function setTool(k) { bulldoze = k === 'del'; if (k === 'road' || k === 'rail') state.kind = k; $('bRoad').classList.toggle('on', k === 'road'); $('bRail').classList.toggle('on', k === 'rail'); $('bDel').classList.toggle('on', k === 'del'); state.pick = null; dirty = true; }
+$('bRoad').onclick = () => setTool('road'); $('bRail').onclick = () => setTool('rail'); $('bDel').onclick = () => setTool('del');
+$('bView').onclick = () => { state.view = { top: 'tilt', tilt: 'top' }[state.view]; $('bView').textContent = 'Pohled: ' + { top: 'shora', tilt: 'nadhled' }[state.view]; dirty = true; };
+$('bRot').onclick = () => { state.viewStep = (state.viewStep + 1) % 8; dirty = true; };
+$('bPause').onclick = () => { paused = !paused; $('bPause').textContent = paused ? '▶ Provoz' : '⏸ Provoz'; };
+document.querySelectorAll('[data-go]').forEach(b => b.onclick = () => goTo(b.dataset.go));
+
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min(0.1, (now - last) / 1000); last = now;
+  if (!paused) { let r = dt; while (r > 1e-6) { const h = Math.min(r, 0.04); testStep(h); r -= h; } }
+  updateView(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.fillStyle = '#0d2236'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+  drawWorld(ctx, state);
+  requestAnimationFrame(frame);
+}
+say(fails.length ? 'Některé stavby se nepostavily: ' + fails.join(' | ') : '1–4: jeden most přes dálnici (silnice / kolej, kolmo / šikmo) mezi městy. 5: dvě napojení. 6: rampa do oblouku. 7: výhybna se semafory. Vozidla vznikají a mizí jen v městech.', !fails.length);
+requestAnimationFrame(frame);
+window.addEventListener('error', e => say('Chyba: ' + e.message, false));
+</script>
+</body></html>
